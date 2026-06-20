@@ -9,6 +9,7 @@ class UserSession(BaseModel):
     current_repo: Optional[str] = None
     current_branch: Optional[str] = None
     project_type: str = "nextjs"
+    project_memory: Dict = {}
     files: Dict[str, str] = {}
     last_preview_url: Optional[str] = None
     last_screenshot_path: Optional[str] = None

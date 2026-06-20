@@ -13,7 +13,7 @@ class QwenService:
         self.temperature = 0.2
         self.max_tokens = 8192
 
-    def _call(self, system_prompt: str, user_prompt: str, max_tokens: int = None) -> str:
+    def _call(self, system_prompt: str, user_prompt: str, max_tokens: int = None, image_url: str = None) -> str:
         """Call Ollama or DashScope API."""
         tokens = max_tokens or self.max_tokens
 
@@ -23,12 +23,23 @@ class QwenService:
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json"
             }
+            
+            # Multi-modal payload structure
+            if image_url:
+                user_content = [{"image": image_url}, {"text": user_prompt}]
+                sys_content = [{"text": system_prompt}]
+                model = "qwen-vl-plus" # Vision model
+            else:
+                user_content = user_prompt
+                sys_content = system_prompt
+                model = self.model
+
             payload = {
-                "model": self.model,
+                "model": model,
                 "input": {
                     "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
+                        {"role": "system", "content": sys_content},
+                        {"role": "user", "content": user_content}
                     ]
                 },
                 "parameters": {
@@ -40,7 +51,7 @@ class QwenService:
             resp = requests.post(self.api_url, json=payload, headers=headers, timeout=180)
             return resp.json()["output"]["choices"][0]["message"]["content"]
         else:
-            # Ollama API
+            # Ollama API (Skipping image handling for local ollama MVP)
             payload = {
                 "model": self.model,
                 "system": system_prompt,
@@ -55,10 +66,41 @@ class QwenService:
             resp = requests.post(self.api_url, json=payload, timeout=180)
             return resp.json()["response"]
 
-    def generate_project(self, description: str, project_type: str = "nextjs") -> Dict[str, str]:
-        """Generate complete file structure from description."""
+    def plan_project(self, description: str) -> Dict:
+        """Plan a new project and define memory context."""
+        system = self._load_prompt("system_plan_project.txt")
+        user = f"Description: {description}"
+        
+        raw = self._call(system, user, max_tokens=2048)
+        
+        try:
+            return self._parse_json(raw)
+        except json.JSONDecodeError:
+            # Basic fallback if parsing fails
+            return {
+                "project_memory": {},
+                "plan_description": description
+            }
+
+    def plan_architecture(self, plan_description: str, project_memory: Dict) -> Dict:
+        """Plan the technical architecture (files and dependencies) based on the project plan."""
+        system = self._load_prompt("system_plan_architecture.txt")
+        memory_str = json.dumps(project_memory, indent=2)
+        user = f"Project Memory:\n{memory_str}\n\nProject Plan:\n{plan_description}"
+        
+        raw = self._call(system, user, max_tokens=2048)
+        
+        try:
+            return self._parse_json(raw)
+        except json.JSONDecodeError:
+            return {"file_tree": [], "dependencies": {}, "architecture_notes": ""}
+
+    def generate_project(self, plan_description: str, arch_plan: Dict, project_memory: Dict, project_type: str = "nextjs") -> Dict[str, str]:
+        """Generate complete file structure from plan and architecture."""
         system = self._load_prompt("system_new_project.txt")
-        user = f"Project type: {project_type}\nDescription: {description}"
+        memory_str = json.dumps(project_memory, indent=2)
+        arch_str = json.dumps(arch_plan, indent=2)
+        user = f"Project type: {project_type}\nProject Memory:\n{memory_str}\n\nPlan:\n{plan_description}\n\nArchitecture Spec:\n{arch_str}"
 
         raw = self._call(system, user, max_tokens=8192)
 
@@ -74,10 +116,26 @@ class QwenService:
         # Fallback: extract code blocks
         return self._extract_code_blocks(raw)
 
-    def edit_file(self, filename: str, current_content: str, instruction: str) -> str:
+    def plan_edit(self, instruction: str, files: Dict[str, str], project_memory: Dict, image_url: str = None) -> Dict:
+        """Plan an edit operation."""
+        system = self._load_prompt("system_plan_edit.txt")
+        file_list = "\n".join(files.keys())
+        memory_str = json.dumps(project_memory, indent=2)
+        user = f"Instruction: {instruction}\n\nProject Memory:\n{memory_str}\n\nCurrent Files:\n{file_list}"
+        
+        raw = self._call(system, user, max_tokens=2048, image_url=image_url)
+        
+        try:
+            return self._parse_json(raw)
+        except json.JSONDecodeError:
+            # Fallback
+            return {"files_to_edit": [{"filename": list(files.keys())[0], "instruction": instruction}]} if files else {"files_to_edit": []}
+
+    def edit_file(self, filename: str, current_content: str, instruction: str, project_memory: Dict) -> str:
         """Precise file edit based on instruction."""
         system = self._load_prompt("system_edit_file.txt")
-        user = f"""File: {filename}
+        memory_str = json.dumps(project_memory, indent=2)
+        user = f"""Project Memory:\n{memory_str}\n\nFile: {filename}
 Current content:
 ```
 {current_content}
@@ -99,6 +157,38 @@ Return ONLY the new file content. No explanations, no markdown fences around the
             result = "\n".join(lines)
 
         return result.strip()
+
+    def review_code(self, filename: str, old_content: str, new_content: str, instruction: str) -> str:
+        """Review and fix the coder's output."""
+        system = self._load_prompt("system_review_code.txt")
+        user = f"Filename: {filename}\nInstruction: {instruction}\n\nOld Content:\n```\n{old_content}\n```\n\nCoder's Output:\n```\n{new_content}\n```"
+        
+        result = self._call(system, user, max_tokens=self.max_tokens).strip()
+
+        # Clean up markdown fences if present
+        if result.startswith("```"):
+            lines = result.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            result = "\n".join(lines)
+
+        return result.strip()
+
+    def test_code(self, files: Dict[str, str], instruction: str) -> Dict[str, str]:
+        """Holistic static analysis of all generated code to catch missing imports or syntax issues."""
+        system = self._load_prompt("system_test_code.txt")
+        files_json = json.dumps(files, indent=2)
+        user = f"Instruction Context:\n{instruction}\n\nGenerated Files:\n{files_json}"
+        
+        raw = self._call(system, user, max_tokens=8192)
+        
+        try:
+            return self._parse_json(raw)
+        except json.JSONDecodeError:
+            # Fallback to returning original files
+            return files
 
     def identify_target_file(self, file_list: str, instruction: str) -> str:
         """Determine which file to edit from instruction."""
@@ -147,3 +237,22 @@ Return ONLY the new file content. No explanations, no markdown fences around the
                 pass
 
         return files
+
+    def _parse_json(self, raw: str) -> dict:
+        """Robustly parse JSON by stripping markdown fences."""
+        raw = raw.strip()
+        if raw.startswith("```"):
+            lines = raw.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip().startswith("```"):
+                lines = lines[:-1]
+            raw = "\n".join(lines)
+        
+        # Sometimes the LLM includes prefix text before the JSON
+        start_idx = raw.find("{")
+        end_idx = raw.rfind("}")
+        if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
+            raw = raw[start_idx:end_idx+1]
+
+        return json.loads(raw)
