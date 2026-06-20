@@ -1,16 +1,35 @@
 import re
 import uuid
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, HTTPException, status
 from fastapi.responses import PlainTextResponse
 from app.models import UserSession, WhatsAppMessage
 from app.dependencies import wa, qwen, github, vercel, screenshot, sessions
+from twilio.request_validator import RequestValidator
+from app.config import config
+import hashlib
+import asyncio
 
 router = APIRouter()
 
 @router.post("/webhook")
 async def webhook(request: Request):
     """Handle incoming WhatsApp messages from Twilio."""
+    # Twilio signature validation
+    validator = RequestValidator(config.TWILIO_TOKEN)
+    signature = request.headers.get("X-Twilio-Signature", "")
+    
     form = await request.form()
+    form_dict = {k: v for k, v in form.items()}
+    
+    # Validate signature (checking both raw URL and configured BASE_URL for ngrok support)
+    url = str(request.url)
+    if not validator.validate(url, form_dict, signature):
+        constructed_url = f"{config.BASE_URL.rstrip('/')}{request.url.path}"
+        if request.url.query:
+            constructed_url += f"?{request.url.query}"
+            
+        if not validator.validate(constructed_url, form_dict, signature):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid Twilio signature")
 
     msg = WhatsAppMessage(
         from_number=form.get("From", "").replace("whatsapp:", ""),
@@ -55,7 +74,7 @@ async def webhook(request: Request):
 
 async def handle_help(session: UserSession, msg: WhatsAppMessage):
     """Send help message."""
-    help_text = """🦅 *Raptor-AI* — Vibecode webapps via WhatsApp
+    help_text = """🦅 *Vibe-Coder-Agent* — Vibecode webapps via WhatsApp
 
 *Commands:*
 • `new {name}: {description}` — Create a new project
@@ -94,7 +113,7 @@ async def handle_new_project(session: UserSession, msg: WhatsAppMessage):
     if not session.github_token:
         await wa.send_text(msg.from_number, 
             "🔗 *Link GitHub first!*\n"
-            "Visit: https://github.com/apps/raptor-ai/installations\n"
+            "Visit: https://github.com/apps/vibe-coder-agent/installations\n"
             "Then reply `link github`")
         return
 
@@ -103,17 +122,17 @@ async def handle_new_project(session: UserSession, msg: WhatsAppMessage):
     try:
         # Plan with Planner Agent
         await wa.send_text(msg.from_number, "🧠 Planning project requirements...")
-        plan = qwen.plan_project(description)
+        plan = await asyncio.to_thread(qwen.plan_project, description)
         session.project_memory = plan.get("project_memory", {})
         plan_desc = plan.get("plan_description", description)
 
         # Plan with Architect Agent
         await wa.send_text(msg.from_number, "🏗️ Designing architecture and file tree...")
-        arch_plan = qwen.plan_architecture(plan_desc, session.project_memory)
+        arch_plan = await asyncio.to_thread(qwen.plan_architecture, plan_desc, session.project_memory)
 
         # Generate code with Qwen
         await wa.send_text(msg.from_number, "💻 Writing code...")
-        files = qwen.generate_project(plan_desc, arch_plan, session.project_memory, session.project_type)
+        files = await asyncio.to_thread(qwen.generate_project, plan_desc, arch_plan, session.project_memory, session.project_type)
 
         if not files:
             await wa.send_text(msg.from_number, 
@@ -122,7 +141,7 @@ async def handle_new_project(session: UserSession, msg: WhatsAppMessage):
 
         # Test code with Tester Agent
         await wa.send_text(msg.from_number, "🧪 Testing codebase...")
-        files = qwen.test_code(files, plan_desc)
+        files = await asyncio.to_thread(qwen.test_code, files, plan_desc)
 
         # Create GitHub repo
         await wa.send_text(msg.from_number, "📁 Creating GitHub repo...")
@@ -134,7 +153,7 @@ async def handle_new_project(session: UserSession, msg: WhatsAppMessage):
 
         session.current_repo = repo_full_name
         session.current_branch = "main"
-        session.files = {k: hash(v) for k, v in files.items()}
+        session.files = {k: hashlib.sha256(v.encode()).hexdigest() for k, v in files.items()}
 
         # Push to GitHub
         await wa.send_text(msg.from_number, "📤 Pushing code to GitHub...")
@@ -143,12 +162,13 @@ async def handle_new_project(session: UserSession, msg: WhatsAppMessage):
             repo_full_name,
             "main",
             files,
-            f"🦅 Raptor-AI initial commit: {description[:50]}"
+            f"🦅 Vibe-Coder-Agent initial commit: {description[:50]}"
         )
 
         # Deploy to Vercel
         await wa.send_text(msg.from_number, "🌐 Deploying to Vercel...")
-        preview_url = await vercel.deploy_repo(repo_full_name, project_name, "main")
+        repo_id = await github.get_repo_id(session.github_token, repo_full_name)
+        preview_url = await vercel.deploy_repo(repo_full_name, project_name, "main", repo_id)
         session.last_preview_url = preview_url
 
         # Screenshot
@@ -183,7 +203,7 @@ async def handle_iterate(session: UserSession, msg: WhatsAppMessage):
     try:
         # Plan the edit
         await wa.send_text(msg.from_number, "🧠 Planning changes...")
-        plan = qwen.plan_edit(msg.body, session.files, session.project_memory, image_url=msg.media_url)
+        plan = await asyncio.to_thread(qwen.plan_edit, msg.body, session.files, session.project_memory, msg.media_url)
         files_to_edit = plan.get("files_to_edit", [])
 
         if not files_to_edit:
@@ -214,14 +234,14 @@ async def handle_iterate(session: UserSession, msg: WhatsAppMessage):
             await wa.send_text(msg.from_number, f"✏️ Editing *{target_file}*...")
 
             # Generate edit (Coder)
-            new_content = qwen.edit_file(target_file, current, instruction, session.project_memory)
+            new_content = await asyncio.to_thread(qwen.edit_file, target_file, current, instruction, session.project_memory)
 
             # Review code (Reviewer)
             await wa.send_text(msg.from_number, f"🔍 Reviewing *{target_file}*...")
-            reviewed_content = qwen.review_code(target_file, current, new_content, instruction)
+            reviewed_content = await asyncio.to_thread(qwen.review_code, target_file, current, new_content, instruction)
 
             updated_files[target_file] = reviewed_content
-            session.files[target_file] = hash(reviewed_content)
+            session.files[target_file] = hashlib.sha256(reviewed_content.encode()).hexdigest()
 
         if not updated_files:
             return
@@ -331,12 +351,13 @@ async def handle_push(session: UserSession, msg: WhatsAppMessage):
 
 
 async def handle_link_github(session: UserSession, msg: WhatsAppMessage):
-    """Send GitHub App installation link."""
+    """Send GitHub App installation link and OAuth login link."""
+    login_url = f"{config.BASE_URL}/auth/github/login?wa_number={msg.from_number}"
+    
     text = ("🔗 *Connect GitHub*\n\n"
-            "1. Install the Raptor-AI GitHub App:\n"
-            "https://github.com/apps/raptor-ai/installations\n\n"
-            "2. After installing, reply with your installation ID:\n"
-            "`github {installation_id}`\n\n"
-            "(Find it in the URL after installing)")
+            "1. Install the Vibe-Coder-Agent GitHub App:\n"
+            "https://github.com/apps/vibe-coder-agent/installations\n\n"
+            "2. After installing, authorize the app to link your account:\n"
+            f"{login_url}")
 
     await wa.send_text(msg.from_number, text)

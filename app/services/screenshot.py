@@ -66,7 +66,7 @@ class ScreenshotService:
         combined.paste(before, (0, 0))
         combined.paste(after, (before.width, 0))
 
-        output_path = os.path.join(self.output_dir, f"comparison_{hashlib.md5().hexdigest()[:8]}.jpg")
+        output_path = os.path.join(self.output_dir, f"comparison_{hashlib.md5(f'{before_url}{after_url}'.encode()).hexdigest()[:8]}.jpg")
         combined.save(output_path, "JPEG", quality=75)
 
         return output_path

@@ -106,7 +106,7 @@ docker-compose up --build
 
 1. Go to GitHub → Settings → Developer settings → GitHub Apps → New
 2. Fill in:
-   - **Name**: raptor-ai
+   - **Name**: vibe-coder-agent
    - **Homepage URL**: https://your-domain.com
    - **Webhook URL**: https://your-domain.com/auth/github/webhook
    - **Webhook secret**: Generate random string

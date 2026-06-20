@@ -2,6 +2,7 @@ import os
 import base64
 import time
 import jwt
+import asyncio
 import requests
 from typing import Dict, Optional, List
 from app.config import config
@@ -22,6 +23,10 @@ class GitHubService:
         }
         return jwt.encode(payload, self.private_key, algorithm="RS256")
 
+    async def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+        """Execute request in a separate thread to avoid blocking the event loop."""
+        return await asyncio.to_thread(requests.request, method, url, **kwargs)
+
     def get_installation_token(self, installation_id: str) -> str:
         """Exchange JWT for installation access token."""
         jwt_token = self._generate_jwt()
@@ -36,8 +41,8 @@ class GitHubService:
         return resp.json()["token"]
 
     async def create_repo(self, token: str, name: str, description: str = "") -> str:
-        """Create repo under user's account. Returns full_name."""
-        resp = requests.post(
+        """Create repo under user's account using user OAuth token. Returns full_name."""
+        resp = await self._request("POST",
             f"{self.base_url}/user/repos",
             headers={
                 "Authorization": f"token {token}",
@@ -54,9 +59,18 @@ class GitHubService:
         resp.raise_for_status()
         return resp.json()["full_name"]
 
+    async def get_repo_id(self, token: str, repo: str) -> str:
+        """Get the numeric ID of a repository."""
+        resp = await self._request("GET",
+            f"{self.base_url}/repos/{repo}",
+            headers={"Authorization": f"token {token}"}
+        )
+        resp.raise_for_status()
+        return str(resp.json()["id"])
+
     async def get_default_branch(self, token: str, repo: str) -> str:
         """Get default branch name."""
-        resp = requests.get(
+        resp = await self._request("GET",
             f"{self.base_url}/repos/{repo}",
             headers={"Authorization": f"token {token}"}
         )
@@ -68,16 +82,14 @@ class GitHubService:
         if not from_branch:
             from_branch = await self.get_default_branch(token, repo)
 
-        # Get SHA of latest commit on from_branch
-        ref_resp = requests.get(
+        ref_resp = await self._request("GET",
             f"{self.base_url}/repos/{repo}/git/ref/heads/{from_branch}",
             headers={"Authorization": f"token {token}"}
         )
         ref_resp.raise_for_status()
         sha = ref_resp.json()["object"]["sha"]
 
-        # Create new branch
-        resp = requests.post(
+        resp = await self._request("POST",
             f"{self.base_url}/repos/{repo}/git/refs",
             headers={"Authorization": f"token {token}"},
             json={
@@ -91,26 +103,23 @@ class GitHubService:
     async def commit_files(self, token: str, repo: str, branch: str, 
                           files: Dict[str, str], message: str) -> str:
         """Create/update multiple files in a single commit."""
-        # Get latest commit SHA on branch
-        ref_resp = requests.get(
+        ref_resp = await self._request("GET",
             f"{self.base_url}/repos/{repo}/git/ref/heads/{branch}",
             headers={"Authorization": f"token {token}"}
         )
         ref_resp.raise_for_status()
         latest_sha = ref_resp.json()["object"]["sha"]
 
-        # Get tree SHA
-        commit_resp = requests.get(
+        commit_resp = await self._request("GET",
             f"{self.base_url}/repos/{repo}/git/commits/{latest_sha}",
             headers={"Authorization": f"token {token}"}
         )
         commit_resp.raise_for_status()
         base_tree_sha = commit_resp.json()["tree"]["sha"]
 
-        # Create blobs for each file
         blobs = []
         for path, content in files.items():
-            blob_resp = requests.post(
+            blob_resp = await self._request("POST",
                 f"{self.base_url}/repos/{repo}/git/blobs",
                 headers={"Authorization": f"token {token}"},
                 json={"content": content, "encoding": "utf-8"}
@@ -123,8 +132,7 @@ class GitHubService:
                 "sha": blob_resp.json()["sha"]
             })
 
-        # Create new tree
-        tree_resp = requests.post(
+        tree_resp = await self._request("POST",
             f"{self.base_url}/repos/{repo}/git/trees",
             headers={"Authorization": f"token {token}"},
             json={"base_tree": base_tree_sha, "tree": blobs}
@@ -132,8 +140,7 @@ class GitHubService:
         tree_resp.raise_for_status()
         new_tree_sha = tree_resp.json()["sha"]
 
-        # Create commit
-        new_commit = requests.post(
+        new_commit = await self._request("POST",
             f"{self.base_url}/repos/{repo}/git/commits",
             headers={"Authorization": f"token {token}"},
             json={
@@ -145,8 +152,7 @@ class GitHubService:
         new_commit.raise_for_status()
         new_commit_sha = new_commit.json()["sha"]
 
-        # Update branch reference
-        update_resp = requests.patch(
+        update_resp = await self._request("PATCH",
             f"{self.base_url}/repos/{repo}/git/refs/heads/{branch}",
             headers={"Authorization": f"token {token}"},
             json={"sha": new_commit_sha}
@@ -157,7 +163,7 @@ class GitHubService:
 
     async def get_file(self, token: str, repo: str, branch: str, path: str) -> str:
         """Get file content from repo."""
-        resp = requests.get(
+        resp = await self._request("GET",
             f"{self.base_url}/repos/{repo}/contents/{path}?ref={branch}",
             headers={"Authorization": f"token {token}"}
         )
@@ -168,16 +174,13 @@ class GitHubService:
     async def list_files(self, token: str, repo: str, branch: str, path: str = "") -> List[Dict]:
         """List files in directory."""
         url = f"{self.base_url}/repos/{repo}/contents/{path}?ref={branch}" if path else f"{self.base_url}/repos/{repo}/contents?ref={branch}"
-        resp = requests.get(
-            url,
-            headers={"Authorization": f"token {token}"}
-        )
+        resp = await self._request("GET", url, headers={"Authorization": f"token {token}"})
         resp.raise_for_status()
         return resp.json()
 
     async def create_pull_request(self, token: str, repo: str, title: str, head: str, base: str, body: str = "") -> str:
         """Create pull request."""
-        resp = requests.post(
+        resp = await self._request("POST",
             f"{self.base_url}/repos/{repo}/pulls",
             headers={"Authorization": f"token {token}"},
             json={

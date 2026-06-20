@@ -1,5 +1,5 @@
 import os
-import time
+import asyncio
 import requests
 from typing import Optional
 from app.config import config
@@ -16,6 +16,9 @@ class VercelService:
             "Content-Type": "application/json"
         }
 
+    async def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+        return await asyncio.to_thread(requests.request, method, url, **kwargs)
+
     async def create_project(self, name: str, repo_url: str) -> str:
         """Create Vercel project linked to GitHub repo. Returns project_id."""
         payload = {
@@ -29,7 +32,7 @@ class VercelService:
         if self.team_id:
             payload["teamId"] = self.team_id
 
-        resp = requests.post(
+        resp = await self._request("POST",
             f"{self.base_url}/v9/projects",
             headers=self._headers(),
             json=payload
@@ -37,22 +40,21 @@ class VercelService:
         resp.raise_for_status()
         return resp.json()["id"]
 
-    async def deploy_project(self, project_id: str, repo: str, branch: str = "main") -> str:
+    async def deploy_project(self, project_id: str, repo: str, repo_id: str, branch: str = "main") -> str:
         """Trigger deployment. Returns deploy_id."""
-        repo_full = repo  # owner/repo-name
         payload = {
             "name": repo.split("/")[1],
             "project": project_id,
             "gitSource": {
                 "type": "github",
-                "repoId": repo_full,
+                "repoId": repo_id,
                 "ref": branch,
-                "repo": repo_full
+                "repo": repo
             },
             "target": "production"
         }
 
-        resp = requests.post(
+        resp = await self._request("POST",
             f"{self.base_url}/v13/deployments",
             headers=self._headers(),
             json=payload
@@ -66,7 +68,7 @@ class VercelService:
         if self.team_id:
             url += f"?teamId={self.team_id}"
 
-        resp = requests.get(url, headers=self._headers())
+        resp = await self._request("GET", url, headers=self._headers())
         resp.raise_for_status()
         return resp.json()
 
@@ -81,21 +83,16 @@ class VercelService:
             if status.get("readyState") in ["ERROR", "CANCELED"]:
                 raise Exception(f"Deploy failed: {status.get('errorMessage', 'Unknown error')}")
 
-            time.sleep(2)
+            await asyncio.sleep(2)
 
         raise TimeoutError(f"Deploy didn't finish in {timeout}s")
 
-    async def deploy_repo(self, repo: str, project_name: str, branch: str = "main") -> str:
+    async def deploy_repo(self, repo: str, project_name: str, branch: str, repo_id: str) -> str:
         """Full deploy flow: create project, trigger deploy, wait for URL."""
         repo_url = f"https://github.com/{repo}"
 
-        # Create project
         project_id = await self.create_project(project_name, repo_url)
-
-        # Trigger deploy
-        deploy_id = await self.deploy_project(project_id, repo, branch)
-
-        # Wait for ready
+        deploy_id = await self.deploy_project(project_id, repo, repo_id, branch)
         url = await self.wait_for_deploy(deploy_id)
 
         return f"https://{url}"

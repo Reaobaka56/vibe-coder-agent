@@ -46,11 +46,11 @@ class WhatsAppService:
         )
 
     async def _upload_image(self, image_path: str) -> str:
-        """Upload image to public URL. Replace with S3/Cloudinary in production."""
-        # MVP: return file:// path (won't work with Twilio in production)
-        # In production: upload to S3 and return https:// URL
-        return f"file://{image_path}"
+        """Upload image to public URL."""
+        filename = os.path.basename(image_path)
+        return f"{config.BASE_URL}/static/{filename}"
 
     async def _upload_file(self, file_path: str) -> str:
         """Upload file to public URL."""
-        return f"file://{file_path}"
+        filename = os.path.basename(file_path)
+        return f"{config.BASE_URL}/static/{filename}"

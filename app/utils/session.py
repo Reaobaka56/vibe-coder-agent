@@ -1,5 +1,6 @@
 import json
 import redis
+from datetime import datetime
 from typing import Optional
 from app.models import UserSession
 from app.config import config
@@ -7,7 +8,7 @@ from app.config import config
 class SessionManager:
     def __init__(self, redis_url: str = None):
         self.redis = redis.from_url(redis_url or config.REDIS_URL, decode_responses=True)
-        self.prefix = "raptor:session:"
+        self.prefix = "vibe-coder:session:"
         self.ttl = 86400 * 7  # 7 days
 
     def _key(self, wa_number: str) -> str:
