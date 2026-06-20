@@ -35,6 +35,7 @@ class Config:
 
     # App
     APP_NAME = "Vibe-Coder-Agent"
+    BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
     APP_VERSION = "0.1.0"
     MAX_MESSAGE_LENGTH = 1500
     MAX_CONVERSATION_HISTORY = 10
