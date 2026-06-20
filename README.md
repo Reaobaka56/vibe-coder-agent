@@ -52,6 +52,7 @@ vibe-coder-agent/
 - GitHub App
 - Vercel account
 - Ollama (local) or DashScope API key
+- Ngrok (for local webhook testing)
 
 ### 1. Clone & Install
 ```bash
@@ -82,8 +83,9 @@ uvicorn app.main:app --reload --port 8000
 ngrok http 8000
 ```
 
-### 4. Configure Twilio Webhook
-Set your Twilio WhatsApp webhook URL to `https://your-ngrok.ngrok.io/webhook`
+### 4. Configure Webhooks & Base URL
+1. Set your Twilio WhatsApp webhook URL to `https://your-ngrok-domain.ngrok-free.app/webhook`
+2. Ensure your `.env` has `BASE_URL` set to this exact domain (e.g., `BASE_URL=https://your-ngrok-domain.ngrok-free.app`). This is strictly required for Twilio signature validation and WhatsApp image attachments.
 
 ## Usage
 
@@ -108,13 +110,18 @@ docker-compose up --build
 2. Fill in:
    - **Name**: vibe-coder-agent
    - **Homepage URL**: https://your-domain.com
+   - **Callback URL**: https://your-domain.com/auth/github/callback *(Required for OAuth)*
    - **Webhook URL**: https://your-domain.com/auth/github/webhook
-   - **Webhook secret**: Generate random string
-   - **Permissions**: Contents (Read/Write), Metadata (Read)
+   - **Webhook secret**: Generate a random string
+   - **Permissions**: 
+     - **Administration** (Read & Write) — *Required to create new repositories*
+     - **Contents** (Read & Write)
+     - **Metadata** (Read-only)
    - **Subscribe to events**: Installation
-3. Generate private key, download PEM
-4. Install app on your account
-5. Copy App ID and PEM to `.env`
+3. Generate a private key and download the PEM file.
+4. Generate a **Client Secret** on the app settings page.
+5. Install the app on your account.
+6. Copy the App ID, Client ID, Client Secret, Webhook Secret, and PEM contents to your `.env` file.
 
 ## License
 
