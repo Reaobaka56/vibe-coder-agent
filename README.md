@@ -8,6 +8,41 @@ Vibecode webapps through WhatsApp. Generate, edit, and deploy web applications u
 WhatsApp → Twilio → FastAPI → Qwen 2.5-Coder → GitHub → Vercel → Screenshot → WhatsApp
 ```
 
+## Project Structure
+
+```text
+vibe-coder-agent/
+├── app/
+│   ├── routers/        # FastAPI route handlers
+│   │   ├── github.py   # GitHub OAuth & webhooks
+│   │   ├── health.py   # Health checks
+│   │   └── webhook.py  # Twilio WhatsApp entry & command handlers
+│   ├── services/       # Core business logic & external APIs
+│   │   ├── github.py
+│   │   ├── qwen.py     # Planner, Architect, Coder, Reviewer, Tester agents
+│   │   ├── screenshot.py
+│   │   ├── vercel.py
+│   │   └── whatsapp.py
+│   ├── utils/          # Utilities
+│   │   └── session.py  # Redis session management
+│   ├── config.py       # Environment variables
+│   ├── dependencies.py # Service singletons
+│   ├── main.py         # App entry point
+│   └── models.py       # Pydantic data models
+├── prompts/            # System prompts for all Qwen agents
+│   ├── system_edit_file.txt
+│   ├── system_new_project.txt
+│   ├── system_plan_architecture.txt
+│   ├── system_plan_edit.txt
+│   ├── system_plan_project.txt
+│   ├── system_review_code.txt
+│   └── system_test_code.txt
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+└── README.md
+```
+
 ## Quick Start
 
 ### Prerequisites
