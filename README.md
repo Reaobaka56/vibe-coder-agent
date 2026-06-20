@@ -1,4 +1,4 @@
-# 🦅 Raptor-AI
+# vibe-coder-agent
 
 Vibecode webapps through WhatsApp. Generate, edit, and deploy web applications using natural language — all from your phone.
 
@@ -20,7 +20,7 @@ WhatsApp → Twilio → FastAPI → Qwen 2.5-Coder → GitHub → Vercel → Scr
 
 ### 1. Clone & Install
 ```bash
-cd raptor-ai
+cd vibe-coder-agent
 pip install -r requirements.txt
 playwright install chromium
 ```
