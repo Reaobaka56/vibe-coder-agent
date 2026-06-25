@@ -10,3 +10,4 @@ cryptography==42.0.0
 python-dotenv==1.0.0
 playwright==1.44.0
 Pillow==10.3.0
+psycopg[binary]==3.2.1

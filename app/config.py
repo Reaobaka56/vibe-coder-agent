@@ -12,6 +12,10 @@ class Config:
     # Redis
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+    # Postgres
+    DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+
     # GitHub (using raw string replacement for multi-line support)
     GITHUB_APP_ID = os.getenv("GITHUB_APP_ID")
     GITHUB_PRIVATE_KEY = os.getenv("GITHUB_PRIVATE_KEY", "").replace("\\n", "\n")
@@ -39,5 +43,7 @@ class Config:
     APP_VERSION = "0.1.0"
     MAX_MESSAGE_LENGTH = 1500
     MAX_CONVERSATION_HISTORY = 10
+    MAX_PROJECTS_PER_NUMBER = int(os.getenv("MAX_PROJECTS_PER_NUMBER", "2"))
+    MAX_EDITS_PER_PROJECT = int(os.getenv("MAX_EDITS_PER_PROJECT", "20"))
 
 config = Config()
