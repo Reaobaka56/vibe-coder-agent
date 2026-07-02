@@ -180,17 +180,6 @@ async def is_verified(wa_number: str) -> bool:
         logger.error(f"Error checking verification for {wa_number}: {e}")
         return False
 
-                INSERT INTO users (wa_number, github_token, updated_at)
-                VALUES (%s, %s, NOW())
-                ON CONFLICT (wa_number) DO UPDATE SET
-                    github_token = COALESCE(EXCLUDED.github_token, users.github_token),
-                    updated_at = NOW()
-                """,
-                (wa_number, github_token),
-            )
-        conn.commit()
-
-
 async def get_github_token(wa_number: str) -> Optional[str]:
     if not config.DATABASE_URL:
         return None
