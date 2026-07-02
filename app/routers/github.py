@@ -3,10 +3,13 @@ import hashlib
 import urllib.parse
 import asyncio
 import requests
+import logging
 from fastapi import APIRouter, Request, HTTPException, status
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from app.config import config
 from app.dependencies import sessions
+
+logger = logging.getLogger("github")
 
 router = APIRouter(prefix="/auth/github")
 
@@ -18,16 +21,19 @@ async def github_login(wa_number: str):
     # Store wa_number in state to map back after auth
     state = urllib.parse.quote_plus(wa_number)
     
-    url = f"https://github.com/login/oauth/authorize?client_id={client_id}&redirect_uri={redirect_uri}&state={state}"
+    # Add scope so token has repo access
+    url = f"https://github.com/login/oauth/authorize?client_id={client_id}&redirect_uri={redirect_uri}&state={state}&scope=repo,read:user"
     return RedirectResponse(url)
 
 @router.get("/callback")
 async def github_callback(code: str, state: str = None, error: str = None):
     """Handle GitHub OAuth callback and exchange code for token."""
     if error:
+        logger.warning(f"GitHub OAuth error: {error}")
         return PlainTextResponse(f"OAuth Error: {error}", status_code=400)
     
     if not state:
+        logger.error("Missing state parameter in callback")
         return PlainTextResponse("Missing state parameter", status_code=400)
         
     wa_number = urllib.parse.unquote_plus(state)
@@ -45,19 +51,23 @@ async def github_callback(code: str, state: str = None, error: str = None):
     data = resp.json()
     
     if "access_token" not in data:
+        logger.error(f"[github_callback] token exchange failed for {wa_number}: {data}")
         return JSONResponse({"error": "Failed to get access token", "details": data}, status_code=400)
-        
+    
+    logger.info(f"[github_callback] token exchange successful for {wa_number}")
     access_token = data["access_token"]
     
     # Get user session
     session = await sessions.get(wa_number)
     if not session:
+        logger.error(f"No active session for WhatsApp number {wa_number}")
         return PlainTextResponse(f"No active session for WhatsApp number {wa_number}. Text the bot first.", status_code=400)
         
     # Store token
     session.github_token = access_token
     await sessions.save(session)
     
+    logger.info(f"[github_callback] token saved for {wa_number}")
     return PlainTextResponse("GitHub connected! You can close this window and return to WhatsApp to start generating projects.")
 
 @router.post("/webhook")

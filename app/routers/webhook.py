@@ -4,6 +4,7 @@ from fastapi import APIRouter, Request, HTTPException, status
 from fastapi.responses import PlainTextResponse
 from app.models import UserSession, WhatsAppMessage
 from app.dependencies import wa, qwen, github, vercel, screenshot, sessions
+from app.utils import db
 from twilio.request_validator import RequestValidator
 from app.config import config
 import hashlib
@@ -43,9 +44,38 @@ async def webhook(request: Request):
     session = await sessions.get(msg.from_number)
     if not session:
         session = UserSession(wa_number=msg.from_number)
+    
+    # Ensure user exists in database
+    await db.upsert_user(msg.from_number)
 
     # Route by intent
     body_lower = msg.body.lower().strip()
+    
+    # === AUTH GATE ===
+    # Admin token generation command (available to admins)
+    if msg.from_number in config.ADMIN_WA_NUMBERS and body_lower == "gen token":
+        token = await db.create_access_token(msg.from_number)
+        if token:
+            await wa.send_text(msg.from_number, f"🔑 New access token: {token}")
+        else:
+            await wa.send_text(msg.from_number, "❌ Failed to generate token. Check DATABASE_URL env var.")
+        await sessions.save(session)
+        return PlainTextResponse("OK")
+    
+    # Token activation command
+    if body_lower.startswith("activate "):
+        token = msg.body[9:].strip()
+        ok = await db.redeem_access_token(token, msg.from_number)
+        await wa.send_text(msg.from_number, "✅ Access granted." if ok else "❌ Invalid or used token.")
+        await sessions.save(session)
+        return PlainTextResponse("OK")
+    
+    # Access control: if access tokens are required and user is not admin or verified
+    if config.REQUIRE_ACCESS_TOKEN and msg.from_number not in config.ADMIN_WA_NUMBERS:
+        is_verified = await db.is_verified(msg.from_number)
+        if not is_verified:
+            await wa.send_text(msg.from_number, "🔒 Access required. Reply `activate <token>` to unlock.")
+            return PlainTextResponse("OK")
 
     if body_lower.startswith("new "):
         await handle_new_project(session, msg)

@@ -1,16 +1,23 @@
 import os
-from typing import List
+from typing import List, Optional
 from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
 from app.config import config
 
 class WhatsAppService:
     def __init__(self):
-        self.client = Client(config.TWILIO_SID, config.TWILIO_TOKEN)
         self.from_number = config.TWILIO_WHATSAPP_NUMBER
+        if config.TWILIO_SID and config.TWILIO_TOKEN:
+            self.client = Client(config.TWILIO_SID, config.TWILIO_TOKEN)
+        else:
+            self.client = None
 
     async def send_text(self, to: str, body: str):
         """Send text message. Split if >1500 chars."""
+        if not self.client:
+            print(f"[Mock WhatsApp] To {to}: {body}")
+            return
+
         chunks = [body[i:i+config.MAX_MESSAGE_LENGTH] for i in range(0, len(body), config.MAX_MESSAGE_LENGTH)]
         for chunk in chunks:
             self.client.messages.create(
@@ -21,6 +28,10 @@ class WhatsAppService:
 
     async def send_image(self, to: str, image_path: str, caption: str = ""):
         """Send image with caption."""
+        if not self.client:
+            print(f"[Mock WhatsApp] To {to}: {caption} (Image: {image_path})")
+            return
+
         from twilio.base.exceptions import TwilioRestException
         try:
             # For MVP: use local file path with Twilio (needs public URL in prod)

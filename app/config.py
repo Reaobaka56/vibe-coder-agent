@@ -33,6 +33,13 @@ class Config:
     SCREENSHOT_VIEWPORT_DESKTOP = {"width": 1280, "height": 720}
     SCREENSHOT_OUTPUT_DIR = "app/static/screenshots"
 
+    # Database
+    DATABASE_URL = os.getenv("DATABASE_URL", "")
+    
+    # Auth
+    ADMIN_WA_NUMBERS = [n.strip() for n in os.getenv("ADMIN_WA_NUMBERS", "").split(",") if n.strip()]
+    REQUIRE_ACCESS_TOKEN = os.getenv("REQUIRE_ACCESS_TOKEN", "true").lower() == "true"
+
     # App
     APP_NAME = "Vibe-Coder-Agent"
     BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
