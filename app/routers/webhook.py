@@ -5,10 +5,6 @@ from fastapi.responses import PlainTextResponse
 from app.models import UserSession, WhatsAppMessage
 from app.dependencies import wa, qwen, github, vercel, screenshot, sessions
 from app.utils import db
-<<<<<<< HEAD
-=======
-from app.utils.wa import normalise_wa
->>>>>>> 44b1e4fd91df371f7e0c146801a9ebb1982286d9
 from twilio.request_validator import RequestValidator
 from app.config import config
 import hashlib
@@ -37,7 +33,7 @@ async def webhook(request: Request):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid Twilio signature")
 
     msg = WhatsAppMessage(
-        from_number=normalise_wa(form.get("From", "")),
+        from_number=form.get("From", "").replace("whatsapp:", ""),
         body=form.get("Body", ""),
         message_id=form.get("MessageSid", ""),
         media_url=form.get("MediaUrl0"),
@@ -51,10 +47,6 @@ async def webhook(request: Request):
     
     # Ensure user exists in database
     await db.upsert_user(msg.from_number)
-
-    await db.upsert_user(msg.from_number)
-    if not session.github_token:
-        session.github_token = await db.get_github_token(msg.from_number)
 
     # Route by intent
     body_lower = msg.body.lower().strip()

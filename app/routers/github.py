@@ -8,9 +8,6 @@ from fastapi import APIRouter, Request, HTTPException, status
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from app.config import config
 from app.dependencies import sessions
-from app.models import UserSession
-from app.utils import db
-from app.utils.wa import normalise_wa
 
 logger = logging.getLogger("github")
 
@@ -22,7 +19,7 @@ async def github_login(wa_number: str):
     client_id = config.GITHUB_CLIENT_ID
     redirect_uri = urllib.parse.quote_plus(f"{config.BASE_URL}/auth/github/callback")
     # Store wa_number in state to map back after auth
-    state = urllib.parse.quote_plus(normalise_wa(wa_number))
+    state = urllib.parse.quote_plus(wa_number.replace("whatsapp:", ""))
     
     # Add scope so token has repo access
     url = f"https://github.com/login/oauth/authorize?client_id={client_id}&redirect_uri={redirect_uri}&state={state}&scope=repo,read:user"
@@ -39,7 +36,7 @@ async def github_callback(code: str, state: str = None, error: str = None):
         logger.error("Missing state parameter in callback")
         return PlainTextResponse("Missing state parameter", status_code=400)
         
-    wa_number = normalise_wa(urllib.parse.unquote_plus(state))
+    wa_number = urllib.parse.unquote_plus(state)
     
     # Exchange code for access token
     payload = {
@@ -60,21 +57,15 @@ async def github_callback(code: str, state: str = None, error: str = None):
     logger.info(f"[github_callback] token exchange successful for {wa_number}")
     access_token = data["access_token"]
     
-<<<<<<< HEAD
-    # Get user session
-    session = await sessions.get(wa_number)
-    if not session:
-        logger.error(f"No active session for WhatsApp number {wa_number}")
-        return PlainTextResponse(f"No active session for WhatsApp number {wa_number}. Text the bot first.", status_code=400)
-        
-    # Store token
-=======
     # Persist the token to Postgres so fresh workers can authorize future messages.
     await db.upsert_user(wa_number, access_token)
 
     # Also refresh Redis session state for the active conversation cache.
-    session = await sessions.get(wa_number) or UserSession(wa_number=wa_number)
->>>>>>> 44b1e4fd91df371f7e0c146801a9ebb1982286d9
+    session = await sessions.get(wa_number)
+    if not session:
+        from app.models import UserSession
+        session = UserSession(wa_number=wa_number)
+    
     session.github_token = access_token
     await sessions.save(session)
     

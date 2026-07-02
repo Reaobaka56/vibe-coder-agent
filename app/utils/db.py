@@ -263,4 +263,3 @@ async def increment_edit_count(project_id: int):
                 (project_id,),
             )
         conn.commit()
->>>>>>> 44b1e4fd91df371f7e0c146801a9ebb1982286d9
