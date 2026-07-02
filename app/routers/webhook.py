@@ -5,6 +5,10 @@ from fastapi.responses import PlainTextResponse
 from app.models import UserSession, WhatsAppMessage
 from app.dependencies import wa, qwen, github, vercel, screenshot, sessions
 from app.utils import db
+<<<<<<< HEAD
+=======
+from app.utils.wa import normalise_wa
+>>>>>>> 44b1e4fd91df371f7e0c146801a9ebb1982286d9
 from twilio.request_validator import RequestValidator
 from app.config import config
 import hashlib
@@ -33,7 +37,7 @@ async def webhook(request: Request):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid Twilio signature")
 
     msg = WhatsAppMessage(
-        from_number=form.get("From", "").replace("whatsapp:", ""),
+        from_number=normalise_wa(form.get("From", "")),
         body=form.get("Body", ""),
         message_id=form.get("MessageSid", ""),
         media_url=form.get("MediaUrl0"),
@@ -47,6 +51,10 @@ async def webhook(request: Request):
     
     # Ensure user exists in database
     await db.upsert_user(msg.from_number)
+
+    await db.upsert_user(msg.from_number)
+    if not session.github_token:
+        session.github_token = await db.get_github_token(msg.from_number)
 
     # Route by intent
     body_lower = msg.body.lower().strip()
@@ -140,6 +148,14 @@ async def handle_new_project(session: UserSession, msg: WhatsAppMessage):
     if not project_name:
         project_name = f"project-{uuid.uuid4().hex[:6]}"
 
+    project_count = await db.count_projects(msg.from_number)
+    if project_count >= config.MAX_PROJECTS_PER_NUMBER:
+        await wa.send_text(
+            msg.from_number,
+            f"🚫 You already have {config.MAX_PROJECTS_PER_NUMBER} projects. Delete one before creating another.",
+        )
+        return
+
     if not session.github_token:
         await wa.send_text(msg.from_number, 
             "🔗 *Link GitHub first!*\n"
@@ -180,6 +196,8 @@ async def handle_new_project(session: UserSession, msg: WhatsAppMessage):
             project_name, 
             description
         )
+
+        await db.create_project(msg.from_number, project_name, repo_full_name)
 
         session.current_repo = repo_full_name
         session.current_branch = "main"
@@ -226,6 +244,14 @@ async def handle_iterate(session: UserSession, msg: WhatsAppMessage):
 
     if not session.github_token:
         await wa.send_text(msg.from_number, "🔗 Link GitHub first: `link github`")
+        return
+
+    project = await db.get_active_project(msg.from_number, session.current_repo)
+    if project and project["edit_count"] >= config.MAX_EDITS_PER_PROJECT:
+        await wa.send_text(
+            msg.from_number,
+            f"🚫 Edit limit reached ({config.MAX_EDITS_PER_PROJECT} edits) for this project.",
+        )
         return
 
     await wa.send_text(msg.from_number, "🧠 Understanding your edit...")
@@ -286,6 +312,8 @@ async def handle_iterate(session: UserSession, msg: WhatsAppMessage):
             updated_files,
             commit_msg
         )
+        if project:
+            await db.increment_edit_count(project["id"])
 
         # Screenshot updated state
         preview_url = session.last_preview_url or await vercel.get_preview_url(
@@ -382,7 +410,7 @@ async def handle_push(session: UserSession, msg: WhatsAppMessage):
 
 async def handle_link_github(session: UserSession, msg: WhatsAppMessage):
     """Send GitHub App installation link and OAuth login link."""
-    login_url = f"{config.BASE_URL}/auth/github/login?wa_number={msg.from_number}"
+    login_url = f"{config.BASE_URL}/auth/github/login?wa_number={normalise_wa(msg.from_number)}"
     
     text = ("🔗 *Connect GitHub*\n\n"
             "1. Install the Vibe-Coder-Agent GitHub App:\n"

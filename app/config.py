@@ -46,5 +46,7 @@ class Config:
     APP_VERSION = "0.1.0"
     MAX_MESSAGE_LENGTH = 1500
     MAX_CONVERSATION_HISTORY = 10
+    MAX_PROJECTS_PER_NUMBER = int(os.getenv("MAX_PROJECTS_PER_NUMBER", "2"))
+    MAX_EDITS_PER_PROJECT = int(os.getenv("MAX_EDITS_PER_PROJECT", "20"))
 
 config = Config()
