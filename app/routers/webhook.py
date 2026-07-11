@@ -7,8 +7,10 @@ from app.dependencies import wa, qwen, github, vercel, screenshot, sessions
 from app.utils import db
 from twilio.request_validator import RequestValidator
 from app.config import config
+from app.utils.wa import normalise_wa
 import hashlib
 import asyncio
+import datetime
 
 router = APIRouter()
 
@@ -52,15 +54,72 @@ async def webhook(request: Request):
     body_lower = msg.body.lower().strip()
     
     # === AUTH GATE ===
-    # Admin token generation command (available to admins)
-    if msg.from_number in config.ADMIN_WA_NUMBERS and body_lower == "gen token":
-        token = await db.create_access_token(msg.from_number)
-        if token:
-            await wa.send_text(msg.from_number, f"🔑 New access token: {token}")
-        else:
-            await wa.send_text(msg.from_number, "❌ Failed to generate token. Check DATABASE_URL env var.")
-        await sessions.save(session)
-        return PlainTextResponse("OK")
+    # Admin token commands
+    if msg.from_number in config.ADMIN_WA_NUMBERS:
+        if body_lower.startswith("gen token"):
+            parts = msg.body.strip().split()[2:] # Skip 'gen' and 'token'
+            bound_number = None
+            expiry = None
+            label_parts = []
+            
+            for part in parts:
+                if part.startswith('+') or part.isdigit():
+                    bound_number = normalise_wa(part)
+                elif part.endswith('h') and part[:-1].replace('.', '', 1).isdigit():
+                    expiry = float(part[:-1])
+                else:
+                    label_parts.append(part)
+            
+            label = " ".join(label_parts) if label_parts else None
+
+            token = await db.create_access_token(
+                msg.from_number, 
+                bound_wa_number=bound_number, 
+                expires_in_hours=expiry, 
+                label=label
+            )
+            
+            if token:
+                response = f"🔑 New access token: {token}"
+                if bound_number: response += f"\nBound to: {bound_number}"
+                if expiry: response += f"\nExpires in: {expiry}h"
+                if label: response += f"\nLabel: {label}"
+                await wa.send_text(msg.from_number, response)
+            else:
+                await wa.send_text(msg.from_number, "❌ Failed to generate token. Check DATABASE_URL env var.")
+            await sessions.save(session)
+            return PlainTextResponse("OK")
+            
+        elif body_lower == "tokens":
+            tokens = await db.list_access_tokens()
+            if not tokens:
+                await wa.send_text(msg.from_number, "No tokens found.")
+            else:
+                lines = ["*Access Tokens:*"]
+                for t in tokens:
+                    status = "🟢 Open"
+                    if t["used_by"]: 
+                        status = f"🔴 Used by {t['used_by']}"
+                    elif t["revoked"]: 
+                        status = "⚫ Revoked"
+                    elif t["expires_at"] and t["expires_at"] < datetime.datetime.now(datetime.timezone.utc):
+                        status = "🟡 Expired"
+                    
+                    line = f"`{t['token']}` - {status}"
+                    if t["bound_wa_number"]: line += f" (Bound: {t['bound_wa_number']})"
+                    if t["label"]: line += f" [{t['label']}]"
+                    lines.append(line)
+                    
+                await wa.send_text(msg.from_number, "\n".join(lines))
+            await sessions.save(session)
+            return PlainTextResponse("OK")
+            
+        elif body_lower.startswith("revoke "):
+            token_to_revoke = msg.body[7:].strip()
+            ok = await db.revoke_access_token(token_to_revoke)
+            await wa.send_text(msg.from_number, f"✅ Token {token_to_revoke} revoked." if ok else "❌ Failed to revoke token (not found).")
+            await sessions.save(session)
+            return PlainTextResponse("OK")
     
     # Token activation command
     if body_lower.startswith("activate "):

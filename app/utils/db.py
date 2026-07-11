@@ -43,6 +43,10 @@ async def init_db():
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             """)
+            cur.execute("ALTER TABLE access_tokens ADD COLUMN IF NOT EXISTS bound_wa_number TEXT")
+            cur.execute("ALTER TABLE access_tokens ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ")
+            cur.execute("ALTER TABLE access_tokens ADD COLUMN IF NOT EXISTS revoked BOOLEAN NOT NULL DEFAULT FALSE")
+            cur.execute("ALTER TABLE access_tokens ADD COLUMN IF NOT EXISTS label TEXT")
             
             # Projects table
             cur.execute("""
@@ -101,7 +105,7 @@ async def upsert_user(wa_number: str, github_token: Optional[str] = None):
         logger.error(f"Error upserting user {wa_number}: {e}")
 
 
-async def create_access_token(created_by: str) -> str:
+async def create_access_token(created_by: str, bound_wa_number: Optional[str] = None, expires_in_hours: Optional[float] = None, label: Optional[str] = None) -> str:
     """Generate a new access token (admin only)."""
     if not config.DATABASE_URL:
         logger.warning("DATABASE_URL not set — token cannot persist")
@@ -111,10 +115,22 @@ async def create_access_token(created_by: str) -> str:
         token = secrets.token_urlsafe(8)
         conn = _connect()
         with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO access_tokens (token, created_by) VALUES (%s, %s)",
-                (token, created_by)
-            )
+            if expires_in_hours is not None:
+                cur.execute(
+                    """
+                    INSERT INTO access_tokens (token, created_by, bound_wa_number, expires_at, label) 
+                    VALUES (%s, %s, %s, NOW() + %s::interval, %s)
+                    """,
+                    (token, created_by, bound_wa_number, f"{expires_in_hours} hours", label)
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO access_tokens (token, created_by, bound_wa_number, label) 
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (token, created_by, bound_wa_number, label)
+                )
         conn.commit()
         conn.close()
         logger.info(f"Access token created by {created_by}")
@@ -133,15 +149,24 @@ async def redeem_access_token(token: str, wa_number: str) -> bool:
     try:
         conn = _connect()
         with conn.cursor() as cur:
-            # Mark token as used
+            # Mark token as used, ensuring all rules are met
             cur.execute(
-                "UPDATE access_tokens SET used_by=%s, used_at=NOW() WHERE token=%s AND used_by IS NULL",
-                (wa_number, token)
+                """
+                UPDATE access_tokens 
+                SET used_by=%s, used_at=NOW() 
+                WHERE token=%s 
+                AND used_by IS NULL 
+                AND revoked = FALSE
+                AND (expires_at IS NULL OR expires_at > NOW())
+                AND (bound_wa_number IS NULL OR bound_wa_number = %s)
+                RETURNING token
+                """,
+                (wa_number, token, wa_number)
             )
             
-            if cur.rowcount == 0:
+            if cur.fetchone() is None:
                 conn.close()
-                logger.warning(f"Token redemption failed for {wa_number} — token invalid or already used")
+                logger.warning(f"Token redemption failed for {wa_number} — token invalid, used, revoked, expired, or bound to wrong number")
                 return False
             
             # Mark user as verified
@@ -157,6 +182,46 @@ async def redeem_access_token(token: str, wa_number: str) -> bool:
     except Exception as e:
         logger.error(f"Error redeeming token for {wa_number}: {e}")
         return False
+
+async def revoke_access_token(token: str) -> bool:
+    if not config.DATABASE_URL:
+        return False
+    try:
+        conn = _connect()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE access_tokens SET revoked = TRUE WHERE token = %s RETURNING token",
+                (token,)
+            )
+            res = cur.fetchone()
+        conn.commit()
+        conn.close()
+        return bool(res)
+    except Exception as e:
+        logger.error(f"Error revoking token: {e}")
+        return False
+
+async def list_access_tokens(limit: int = 10) -> list:
+    if not config.DATABASE_URL:
+        return []
+    try:
+        conn = _connect()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT token, created_by, bound_wa_number, expires_at, revoked, used_by, created_at, label
+                FROM access_tokens
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (limit,)
+            )
+            res = cur.fetchall()
+        conn.close()
+        return res
+    except Exception as e:
+        logger.error(f"Error listing tokens: {e}")
+        return []
 
 
 async def is_verified(wa_number: str) -> bool:
