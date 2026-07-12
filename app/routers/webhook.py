@@ -1,6 +1,6 @@
 import re
 import uuid
-from fastapi import APIRouter, Request, HTTPException, status
+from fastapi import APIRouter, Request, HTTPException, status, Response
 from fastapi.responses import PlainTextResponse
 from app.models import UserSession, WhatsAppMessage
 from app.dependencies import wa, qwen, github, vercel, screenshot, sessions
@@ -22,6 +22,12 @@ async def webhook(request: Request):
     signature = request.headers.get("X-Twilio-Signature", "")
     
     form = await request.form()
+    
+    # Twilio sends delivery/status callbacks to the same URL.
+    # These have MessageStatus set and no real inbound content — bail early.
+    if form.get("MessageStatus"):
+        return Response(status_code=200)
+
     form_dict = {k: v for k, v in form.items()}
     
     # Validate signature (checking both raw URL and configured BASE_URL for ngrok support)
