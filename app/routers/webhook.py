@@ -24,8 +24,13 @@ async def webhook(request: Request):
     form = await request.form()
     
     # Twilio sends delivery/status callbacks to the same URL.
-    # These have MessageStatus set and no real inbound content — bail early.
-    if form.get("MessageStatus"):
+    # These have MessageStatus/SmsStatus set or match our own sender number — bail early to avoid loops.
+    from_raw = form.get("From", "")
+    if (
+        form.get("MessageStatus")
+        or form.get("SmsStatus")
+        or (from_raw and normalise_wa(from_raw) == normalise_wa(config.TWILIO_WHATSAPP_NUMBER))
+    ):
         return Response(status_code=200)
 
     form_dict = {k: v for k, v in form.items()}
