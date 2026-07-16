@@ -4,6 +4,7 @@ from app.services.github import GitHubService
 from app.services.vercel import VercelService
 from app.services.screenshot import ScreenshotService
 from app.utils.session import SessionManager
+from app.utils.rate_limit import RateLimiter
 
 # Initialize service singletons
 wa = WhatsAppService()
@@ -12,3 +13,4 @@ github = GitHubService()
 vercel = VercelService()
 screenshot = ScreenshotService()
 sessions = SessionManager()
+rate_limiter = RateLimiter()

@@ -2,8 +2,12 @@ import os
 import json
 import re
 import requests
+import logging
 from typing import Dict, List, Tuple, Optional
 from app.config import config
+
+logger = logging.getLogger("qwen")
+
 
 class QwenService:
     def __init__(self):
@@ -14,69 +18,132 @@ class QwenService:
         self.max_tokens = 8192
 
     def _call(self, system_prompt: str, user_prompt: str, max_tokens: int = None, image_url: str = None) -> str:
-        """Call Ollama or DashScope API."""
+        """Call Ollama or DashScope API with comprehensive error handling."""
         tokens = max_tokens or self.max_tokens
 
-        if "dashscope" in self.api_url.lower():
-            # DashScope API
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            # Multi-modal payload structure
-            if image_url:
-                user_content = [{"image": image_url}, {"text": user_prompt}]
-                sys_content = [{"text": system_prompt}]
-                model = "qwen-vl-plus" # Vision model
-            else:
-                user_content = user_prompt
-                sys_content = system_prompt
-                model = self.model
+        try:
+            if "dashscope" in self.api_url.lower():
+                # DashScope API
+                headers = {
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                # Multi-modal payload structure
+                if image_url:
+                    user_content = [{"image": image_url}, {"text": user_prompt}]
+                    sys_content = [{"text": system_prompt}]
+                    model = "qwen-vl-plus" # Vision model
+                else:
+                    user_content = user_prompt
+                    sys_content = system_prompt
+                    model = self.model
 
-            payload = {
-                "model": model,
-                "input": {
-                    "messages": [
-                        {"role": "system", "content": sys_content},
-                        {"role": "user", "content": user_content}
-                    ]
-                },
-                "parameters": {
-                    "temperature": self.temperature,
-                    "max_tokens": tokens,
-                    "result_format": "message"
+                payload = {
+                    "model": model,
+                    "input": {
+                        "messages": [
+                            {"role": "system", "content": sys_content},
+                            {"role": "user", "content": user_content}
+                        ]
+                    },
+                    "parameters": {
+                        "temperature": self.temperature,
+                        "max_tokens": tokens,
+                        "result_format": "message"
+                    }
                 }
-            }
-            resp = requests.post(self.api_url, json=payload, headers=headers, timeout=180)
-            return resp.json()["output"]["choices"][0]["message"]["content"]
-        else:
-            # Ollama API (Skipping image handling for local ollama MVP)
-            payload = {
-                "model": self.model,
-                "system": system_prompt,
-                "prompt": user_prompt,
-                "stream": False,
-                "options": {
-                    "temperature": self.temperature,
-                    "num_ctx": 32768,
-                    "num_predict": tokens,
+                
+                try:
+                    resp = requests.post(self.api_url, json=payload, headers=headers, timeout=180)
+                    resp.raise_for_status()
+                except requests.exceptions.Timeout:
+                    logger.error(f"[DASHSCOPE] API timeout after 180s")
+                    raise TimeoutError("DashScope API timeout - try again")
+                except requests.exceptions.ConnectionError as e:
+                    logger.error(f"[DASHSCOPE] Connection error: {e}")
+                    raise ConnectionError(f"Cannot reach DashScope API: {str(e)[:100]}")
+                except requests.exceptions.HTTPError as e:
+                    error_detail = resp.text if resp else str(e)
+                    if "rate limit" in error_detail.lower() or resp.status_code == 429:
+                        logger.warning(f"[DASHSCOPE] Rate limited: {error_detail[:200]}")
+                        raise RuntimeError("DashScope rate limit hit - try again in a few minutes")
+                    logger.error(f"[DASHSCOPE] HTTP {resp.status_code}: {error_detail[:200]}")
+                    raise RuntimeError(f"DashScope error: {error_detail[:100]}")
+                
+                try:
+                    data = resp.json()
+                    if "output" not in data or "choices" not in data["output"]:
+                        logger.error(f"[DASHSCOPE] Malformed response: {data}")
+                        raise ValueError("Unexpected DashScope response format")
+                    return data["output"]["choices"][0]["message"]["content"]
+                except (KeyError, IndexError, json.JSONDecodeError) as e:
+                    logger.error(f"[DASHSCOPE] Failed to parse response: {e}")
+                    raise ValueError(f"Malformed DashScope response: {str(e)[:100]}")
+            else:
+                # Ollama API (local)
+                payload = {
+                    "model": self.model,
+                    "system": system_prompt,
+                    "prompt": user_prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": self.temperature,
+                        "num_ctx": 32768,
+                        "num_predict": tokens,
+                    }
                 }
-            }
-            resp = requests.post(self.api_url, json=payload, timeout=180)
-            return resp.json()["response"]
+                
+                try:
+                    resp = requests.post(self.api_url, json=payload, timeout=180)
+                    resp.raise_for_status()
+                except requests.exceptions.Timeout:
+                    logger.error(f"[OLLAMA] Local API timeout after 180s")
+                    raise TimeoutError("Local Ollama timeout - check if server is running")
+                except requests.exceptions.ConnectionError as e:
+                    logger.error(f"[OLLAMA] Connection error: {e}")
+                    raise ConnectionError(f"Cannot reach Ollama at {self.api_url}")
+                except requests.exceptions.HTTPError as e:
+                    logger.error(f"[OLLAMA] HTTP {resp.status_code}: {resp.text[:200]}")
+                    raise RuntimeError(f"Ollama error: {resp.text[:100]}")
+                
+                try:
+                    data = resp.json()
+                    if "response" not in data:
+                        logger.error(f"[OLLAMA] Malformed response: {data}")
+                        raise ValueError("Unexpected Ollama response format")
+                    return data["response"]
+                except (KeyError, json.JSONDecodeError) as e:
+                    logger.error(f"[OLLAMA] Failed to parse response: {e}")
+                    raise ValueError(f"Malformed Ollama response: {str(e)[:100]}")
+        
+        except (TimeoutError, ConnectionError, RuntimeError) as e:
+            logger.error(f"[QWEN] Known error: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"[QWEN] Unexpected error: {e}", exc_info=True)
+            raise RuntimeError(f"Unexpected API error: {str(e)[:100]}")
 
     def plan_project(self, description: str) -> Dict:
         """Plan a new project and define memory context."""
         system = self._load_prompt("system_plan_project.txt")
         user = f"Description: {description}"
         
-        raw = self._call(system, user, max_tokens=2048)
-        
         try:
-            return self._parse_json(raw)
-        except json.JSONDecodeError:
-            # Basic fallback if parsing fails
+            raw = self._call(system, user, max_tokens=2048)
+            
+            try:
+                return self._parse_json(raw)
+            except json.JSONDecodeError as e:
+                logger.warning(f"[QWEN] Failed to parse plan_project JSON, using fallback: {e}")
+                # Basic fallback if parsing fails
+                return {
+                    "project_memory": {},
+                    "plan_description": description
+                }
+        except Exception as e:
+            logger.error(f"[QWEN] plan_project failed: {e}")
+            # Return minimal valid response to not block pipeline
             return {
                 "project_memory": {},
                 "plan_description": description
@@ -88,11 +155,16 @@ class QwenService:
         memory_str = json.dumps(project_memory, indent=2)
         user = f"Project Memory:\n{memory_str}\n\nProject Plan:\n{plan_description}"
         
-        raw = self._call(system, user, max_tokens=2048)
-        
         try:
-            return self._parse_json(raw)
-        except json.JSONDecodeError:
+            raw = self._call(system, user, max_tokens=2048)
+            
+            try:
+                return self._parse_json(raw)
+            except json.JSONDecodeError as e:
+                logger.warning(f"[QWEN] Failed to parse plan_architecture JSON, using fallback: {e}")
+                return {"file_tree": [], "dependencies": {}, "architecture_notes": ""}
+        except Exception as e:
+            logger.error(f"[QWEN] plan_architecture failed: {e}")
             return {"file_tree": [], "dependencies": {}, "architecture_notes": ""}
 
     def generate_project(self, plan_description: str, arch_plan: Dict, project_memory: Dict, project_type: str = "nextjs") -> Dict[str, str]:
