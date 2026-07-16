@@ -311,7 +311,11 @@ Return ONLY the new file content. No explanations, no markdown fences around the
         return files
 
     def _parse_json(self, raw: str) -> dict:
-        """Robustly parse JSON by stripping markdown fences."""
+        """Robustly parse JSON by stripping markdown fences.
+        
+        Raises:
+            ValueError: If JSON is malformed and cannot be recovered.
+        """
         raw = raw.strip()
         if raw.startswith("```"):
             lines = raw.split("\n")
@@ -327,4 +331,8 @@ Return ONLY the new file content. No explanations, no markdown fences around the
         if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
             raw = raw[start_idx:end_idx+1]
 
-        return json.loads(raw)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.error(f"[QWEN] JSON parse failed on input: {raw[:200]}... Error: {e}")
+            raise ValueError(f"Malformed JSON response from LLM: {str(e)[:100]}")
