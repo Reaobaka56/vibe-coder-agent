@@ -245,17 +245,13 @@ class TestQwenErrorHandling:
     
     @pytest.mark.asyncio
     async def test_malformed_json_fallback(self):
-        """Malformed JSON should use fallback."""
+        """Malformed JSON should raise a clear, catchable error."""
         from app.services.qwen import QwenService
         
         qwen = QwenService()
         
-        # Malformed JSON input should still return something
-        result = qwen._parse_json("{invalid json")
-        # This should raise, so we expect an exception
-        # The actual behavior depends on implementation
-        # For now, just test that the method exists
-        assert hasattr(qwen, '_parse_json')
+        with pytest.raises(ValueError):
+            qwen._parse_json("{invalid json")
     
     def test_extract_code_blocks_fallback(self):
         """Should extract code from non-JSON LLM output."""
@@ -313,21 +309,16 @@ class TestAccessTokenManagement:
 class TestErrorMessages:
     """Test that error messages are user-friendly and safe."""
     
-    def test_error_message_no_secrets(self):
+    def test_error_message_no_secrets(self, monkeypatch):
         """Error messages should not contain secrets."""
         from app.utils.secrets import redact_sensitive_data
         
-        # Use a mock token value for testing (skip if actual token is empty)
-        test_token = config.TWILIO_TOKEN or "mock_token_for_testing_12345"
+        monkeypatch.setattr(config, "TWILIO_TOKEN", "mock_token_for_testing_12345")
         
-        if not test_token or test_token == "":
-            pytest.skip("TWILIO_TOKEN not configured in environment")
-        
-        error_msg = f"Failed to authenticate: token={test_token}"
+        error_msg = f"Failed to authenticate: token={config.TWILIO_TOKEN}"
         safe_msg = redact_sensitive_data(error_msg)
         
-        # The token should not appear in the redacted message
-        assert test_token not in safe_msg or "***REDACTED***" in safe_msg
+        assert config.TWILIO_TOKEN not in safe_msg
         # Verify redaction happened (redaction marker should be present)
         assert "***REDACTED***" in safe_msg or test_token != "mock_token_for_testing_12345"
     
